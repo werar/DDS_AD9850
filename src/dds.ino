@@ -1,41 +1,43 @@
 /*
 Softqware based on the code made by Richard Visokey AD7C - www.ad7c.com
 */
-
+//TODO: print on lcd type of signal
 // Include the library code
+#include <Arduino.h>
 #include <LiquidCrystal.h>
 #include <rotary.h>
 #include <EEPROM.h>
 #include <OneButton.h>
+#include <AD9833.h>
 
-//Setup some items
-#define W_CLK 8   // Pin 8 - connect to AD9850 module word load clock pin (CLK)
-#define FQ_UD 9   // Pin 9 - connect to frequency update pin (FQ)
-#define DATA 10   // Pin 10 - connect to serial data load pin (DATA)
-#define RESET 11  // Pin 11 - connect to reset pin (RST) 
-#define pulseHigh(pin) {digitalWrite(pin, HIGH); digitalWrite(pin, LOW); }
+//PINS to AD9833
+#define FSYNC 10   //
+#define DATA 11   // MOSI must be this pin
+#define CLK 13  // SCK must be this pin
+#define MISO 12 //this pin is not used by AD9833 but is used by SPI, it means that cannot be used if SPI is enabled. AD9833 enables SPI.
 
 #define INITIAL_FREQUENCY_SET 100000
-#define LOWER_FREQUENCY_LIMIT 1000 
-#define UPPER_FREQUENCY_LIMIT 31000000
+#define LOWER_FREQUENCY_LIMIT 90
+#define UPPER_FREQUENCY_LIMIT 12600000
 #define VOLTAGE_PIN A0
-#define EXTERNAL_VOLTAGE_REFERENCE 3.3  //voltage connected as AREF 
+#define EXTERNAL_VOLTAGE_REFERENCE 3.3  //voltage connected as AREF
 #define AC_RESOLUTION 1024
 
-#define intervalInMilisToDoThingsMoreSlower   1000 
+#define intervalInMilisToDoThingsMoreSlower   1000
 #define intervalInMilisToDoThingsLittleSlower  500
 
 #define SET_MSEC_FOR_ONE_CLICK 200
 
 #define SEPARATOR ','
 
-Rotary r = Rotary(2,3); // sets the pins the rotary encoder uses. TODO: check if you really need pins with ext interrupts. 
-LiquidCrystal lcd(12, 13, 7, 6, 5, 4);
+Rotary r = Rotary(2,3); // sets the pins the rotary encoder uses. TODO: check if you really need pins with ext interrupts.
+const int rs = 8, en = 9, d4 = 7, d5 = 6, d6 = 5, d7 = 4;
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
 volatile unsigned long freqencyValue=INITIAL_FREQUENCY_SET; // Starting frequency of VFO
 volatile unsigned long freqencyValuePrev=1; // variable to hold the updated frequency
 volatile unsigned long increment; // starting VFO update increment in HZ.
 
-boolean buttonstate; 
+boolean buttonstate;
 String hertz;
 int  hertzPosition;
 byte ones,tens,hundreds,thousands,tenthousands,hundredthousands,millions ;  //Placeholders
@@ -43,20 +45,43 @@ byte ones,tens,hundreds,thousands,tenthousands,hundredthousands,millions ;  //Pl
 String frequency; // string to hold the frequency
 
 unsigned long timepassed = millis(); // int to hold the arduino miilis since startup
- 
+
 int voltagePin = A0; // pin to measure voltage
 unsigned int voltageValue = 0;
 float calculatedVoltageValue;
 long previousMillisForSlow = 0;   //to slowdown sending data to serial interface
 long previousMillisForLittleSlow =0;
 
-// Setup a new OneButton on pin A4.  
+WaveformType wave_types[] = {SINE_WAVE, TRIANGLE_WAVE, SQUARE_WAVE, HALF_SQUARE_WAVE};
+uint8_t current_wave_type_index=0;
+
+// Setup a new OneButton on pin A4.
 OneButton button(A4, true);
 
-// Setup a new OneButton on pin A3.  
+// Setup a new OneButton on pin A3.
 OneButton buttonTwo(A5, true); //TODO: cannot check what port I used, check that
 
-//functions 
+
+AD9833 gen(FSYNC);       // Defaults to 25MHz internal reference frequency
+
+void change_wave_type()  //sizeof(myarray) / sizeof(int)
+{
+  if(current_wave_type_index<(sizeof(wave_types)/sizeof(WaveformType))-1)
+  {
+    current_wave_type_index=current_wave_type_index+1;
+    Serial.println(current_wave_type_index);
+  }else
+  {
+    current_wave_type_index=0;
+  }
+
+  gen.ApplySignal(wave_types[current_wave_type_index],REG1,freqencyValue);
+  Serial.println(current_wave_type_index);
+  Serial.println(sizeof(wave_types)/sizeof(WaveformType));
+}
+
+
+//functions
 void readVoltage(){
   voltageValue = analogRead(voltagePin);
   calculateVoltageValue();
@@ -74,8 +99,8 @@ void showVoltage(){
 }
 
 void showOnLcd(){
-  lcd.setCursor(0,1); 
-  lcdPrintFloat(calculatedVoltageValue,3);     
+  lcd.setCursor(0,1);
+  lcdPrintFloat(calculatedVoltageValue,3);
 }
 
 void calculateVoltageValue(){
@@ -88,12 +113,12 @@ void sendSampleAsText(){
     Serial.print(freqencyValue);
     Serial.print(SEPARATOR);
     serialPrintFloat(getCalculatedVoltageValue(),3);
-    Serial.println(); 
+    Serial.println();
 }
 
 
 void testSomething(){
-  scanFrequencyRange(1000.0, 29000000.0, 1000); //
+  scanFrequencyRange(1000.0, 12500000.0, 1000); //
 }
 
 void scanFrequencyRange(long minFrequency, long maxFrequency, int frequencyStep){
@@ -103,16 +128,10 @@ void scanFrequencyRange(long minFrequency, long maxFrequency, int frequencyStep)
    readVoltage();
     sendSampleAsText();
   }
-  
-//  for(int k=1;k<8;k++){
-//    for (int i=1; i<=10;i++){ 
-//       unsigned long z=pow(10,k)*i;
-//        Serial.println(long(z));   
-//    }
-//  }
+
   delay(10000);
-  
-  
+
+
   freqencyValue=storeCurrentValue;
   //1,2,3,4,5,6,7,8,9 //100,1000,10000,100000,1000000,1
   //10,20,30,40,50,60,70,80,90
@@ -120,39 +139,29 @@ void scanFrequencyRange(long minFrequency, long maxFrequency, int frequencyStep)
   //1000,2000,3000,4000,5000,6000,7000,8000,9000
   //1*10,1*100,1*1000,1*10000,1*100000,1*1000000
 }
-/*
-void scanFrequencyRange(long minFrequency, long maxFrequency, int frequencyStep){
-  long storeCurrentValue = freqencyValue;
-  for(freqencyValue=minFrequency;freqencyValue<=maxFrequency;freqencyValue=freqencyValue+frequencyStep){
-    sendfrequency(freqencyValue);
-    readVoltage();
-    sendSampleAsText();
-  }
-  freqencyValue=storeCurrentValue;
-}
-*/
+
 
 void doHereThingsOncePerInterval(){
   unsigned long currentMillis = millis();
-  
+
   if(currentMillis - previousMillisForSlow > intervalInMilisToDoThingsMoreSlower) {
-    sendSampleAsText(); 
+    sendSampleAsText();
     previousMillisForSlow = currentMillis;
   }
   if(currentMillis - previousMillisForLittleSlow > intervalInMilisToDoThingsLittleSlower){
       readVoltage();
-       showVoltage(); 
+       showVoltage();
        previousMillisForLittleSlow = currentMillis;
   }
 }
 
 void setIncrementToHigh(){
   increment=100000;
-  setincrement();  
+  setincrement();
 }
 
 void doIfFrequencyWasChanged(){
-  if (freqencyValue != freqencyValuePrev){    
+  if (freqencyValue != freqencyValuePrev){
         showFrequency();
         sendfrequency(freqencyValue);
         freqencyValuePrev = freqencyValue;
@@ -160,86 +169,73 @@ void doIfFrequencyWasChanged(){
 }
 
 void setup() {
+  gen.Begin();              // The loaded defaults are 1000 Hz SINE_WAVE using REG0
+  gen.EnableOutput(true);  // Turn ON the output
+
   //One button will have 3 modes. Click to change frequency, dClick to set frequeny faster
   //press to store current frequency in memory
-  // link the myClickFunction function to be called on a click event.   
+  // link the myClickFunction function to be called on a click event.
   button.attachClick(setincrement);
-  // link the doubleclick function to be called on a doubleclick event.   
+  // link the doubleclick function to be called on a doubleclick event.
   button.attachDoubleClick(setIncrementToHigh);
   //link to press
-  
+
   //button.attachPress(storeMEM);
-  button.attachPress(testSomething);
-  
+  button.attachPress(change_wave_type);
+
   button.setClickTicks(SET_MSEC_FOR_ONE_CLICK);
-  
-  buttonTwo.attachPress(storeMEM);
+
+  buttonTwo.attachPress(change_wave_type);
   buttonTwo.setClickTicks(SET_MSEC_FOR_ONE_CLICK);
-  
-  lcd.begin(16, 2);
-  
+
+  lcd.begin(16,2);
+  lcd.noAutoscroll();
+
+
   attachInterrupt(0, catchRotor, CHANGE);
   attachInterrupt(1, catchRotor, CHANGE);
-  
-  pinMode(FQ_UD, OUTPUT);
-  pinMode(W_CLK, OUTPUT);
-  pinMode(DATA, OUTPUT);
-  pinMode(RESET, OUTPUT); 
-  pulseHigh(RESET);
-  pulseHigh(W_CLK);
-  pulseHigh(FQ_UD);  // this pulse enables serial mode on the AD9850 - Datasheet page 12.
-  
+
+
   // initialize serial communications at 9600 bps:
-  Serial.begin(9600); 
+  Serial.begin(9600);
   analogReference(EXTERNAL); // use AREF for reference voltage 3.3V. It makes better resolution.
-  
+  delay(1000);
   //initial step settings
   increment = 1000;
   hertz = "1 kHz";
   hertzPosition = 11;
- 
-  lcd.setCursor(hertzPosition,1);    
+  lcd.setCursor(hertzPosition,1);
   lcd.print(hertz);
-   // Load the stored frequencyuency  
-    frequency = String(EEPROM.read(0))+String(EEPROM.read(1))+String(EEPROM.read(2))+String(EEPROM.read(3))+String(EEPROM.read(4))+String(EEPROM.read(5))+String(EEPROM.read(6));
-    freqencyValue = frequency.toInt();  //TODO: more check if toInt creates error during conversion
+   // Load the stored frequencyuency
+  //frequency = String(EEPROM.read(0))+String(EEPROM.read(1))+String(EEPROM.read(2))+String(EEPROM.read(3))+String(EEPROM.read(4))+String(EEPROM.read(5))+String(EEPROM.read(6));
+//  freqencyValue = frequency.toInt();  //TODO: more check if toInt creates error during conversion
+    Serial.println(frequency);
     if(freqencyValue<LOWER_FREQUENCY_LIMIT and freqencyValue>UPPER_FREQUENCY_LIMIT){
       freqencyValue=INITIAL_FREQUENCY_SET;
-    } 
+    }
 }
 
 void loop() {
   // keep watching the push button:
   button.tick();
   doIfFrequencyWasChanged();
-   doHereThingsOncePerInterval();
+  doHereThingsOncePerInterval();
 }
 
 void catchRotor(){
   unsigned char result = r.process();
-  if (result) {    
+  if (result) {
     if (result == DIR_CW){freqencyValue=freqencyValue+increment;}
-    else {freqencyValue=freqencyValue-increment;};       
+    else {freqencyValue=freqencyValue-increment;};
       if (freqencyValue >=UPPER_FREQUENCY_LIMIT){freqencyValue=freqencyValuePrev;}; // UPPER VFO LIMIT
       if (freqencyValue <=LOWER_FREQUENCY_LIMIT){freqencyValue=freqencyValuePrev;}; // LOWER VFO LIMIT   #to moje
 }}
 
 // frequencyuency calc from datasheet page 8 = <sys clock> * <frequencyuency tuning word>/2^32
-void sendfrequency(double frequency) {  
-  int32_t calculatedFrequency = frequency * 4294967295/125000000;  // note 125 MHz clock on 9850.  You can make 'slight' tuning variations here by adjusting the clock frequencyuency.
-  for (int b=0; b<4; b++, calculatedFrequency>>=8) {
-    transferByte(calculatedFrequency & 0xFF);
-  }
-  transferByte(0x000);   // Final control byte, all 0 for 9850 chip
-  pulseHigh(FQ_UD);  // Done!  Should see output
-}
-// transfers a byte, a bit at a time, LSB first to the 9850 via serial DATA line
-void transferByte(byte data)
-{
-  for (int i=0; i<8; i++, data>>=1) {
-    digitalWrite(DATA, data & 0x01);
-    pulseHigh(W_CLK);   //after each bit sent, CLK is pulsed high
-  }
+void sendfrequency(double frequency) {
+// Apply a signal to the output. If phaseReg is not supplied, then
+// a phase of 0.0 is applied to the same register as freqReg
+gen.ApplySignal(wave_types[current_wave_type_index],REG1,frequency);
 }
 
 void setincrement(){
@@ -247,12 +243,12 @@ void setincrement(){
   else if (increment == 100){increment = 1000; hertz="1 Khz"; hertzPosition=11;}
   else if (increment == 1000){increment = 10000; hertz="10 Khz"; hertzPosition=10;}
   else if (increment == 10000){increment = 100000; hertz="100 Khz"; hertzPosition=9;}
-  else if (increment == 100000){increment = 1000000; hertz="1 Mhz"; hertzPosition=11;}  
-  else{increment = 10; hertz = "10 Hz"; hertzPosition=10;};  
-   lcd.setCursor(0,1);
-   lcd.print("                ");
-   lcd.setCursor(hertzPosition,1); 
-   lcd.print(hertz); 
+  else if (increment == 100000){increment = 1000000; hertz="1 Mhz"; hertzPosition=11;}
+  else{increment = 10; hertz = "10 Hz"; hertzPosition=10;};
+  lcd.setCursor(0,1);
+  lcd.print("                ");
+  lcd.setCursor(hertzPosition,1);
+  lcd.print(hertz);
 };
 
 void showFrequency(){
@@ -265,8 +261,8 @@ void showFrequency(){
     ones = ((freqencyValue/1)%10);
     lcd.setCursor(0,0);
     lcd.print("                ");
-   if (millions > 9){lcd.setCursor(1,0);}
-   else{lcd.setCursor(2,0);}
+    if (millions > 9){lcd.setCursor(1,0);}
+    else{lcd.setCursor(2,0);}
     lcd.print(millions);
     lcd.print(".");
     lcd.print(hundredthousands);
@@ -286,9 +282,9 @@ void storeMEM(){
    EEPROM.write(1,hundredthousands);
    EEPROM.write(2,tenthousands);
    EEPROM.write(3,thousands);
-   EEPROM.write(4,hundreds);       
+   EEPROM.write(4,hundreds);
    EEPROM.write(5,tens);
-   EEPROM.write(6,ones);   
+   EEPROM.write(6,ones);
    lcd.setCursor(0,0);
    lcd.print("FREQUENCY SAVED ");
    delay(1000);
@@ -362,5 +358,3 @@ void serialPrintFloat( float val, byte precision){
     Serial.print(frac,DEC) ;
   }
 }
-
-
